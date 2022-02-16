@@ -1,0 +1,259 @@
+---
+title: "Snow Data Assignment: Web Scraping, Functions, and Iteration"
+author: "Lauren Kremer"
+date: "2-10-2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T,
+                      message = F,
+                      warning = FALSE,
+                      fig.keep='all')
+
+pkgTest <- function(x)
+{
+  if (x %in% rownames(installed.packages()) == FALSE) {
+    install.packages(x, dependencies= TRUE)
+  }
+  library(x, character.only = TRUE)
+}
+
+# Make a vector of the packages you need
+neededPackages <- c('rvest', 'tidyverse', 'lubridate', 'readxl', 'pdftools') #tools for plot titles 
+
+# For every package in the vector, apply your pkgTest function
+for (package in neededPackages){pkgTest(package)}
+
+```
+
+## Assignment:
+
+### 1. Extract the meteorological data URLs. Here we want you to use the `rvest` package to get the URLs for the `SASP forcing` and `SBSP_forcing` meteorological datasets.
+
+```{r}
+site_url <- 'https://snowstudies.org/archived-data/'
+
+#Read the web url
+webpage <- read_html(site_url)
+
+#webpage %>%
+#html_nodes("a") %>%
+#html_text()
+
+#Extract only weblinks and then the URLs!
+links <- webpage %>%
+  html_nodes('a') %>%
+  .[grepl('forcing',.)] %>%
+ html_attr('href')
+```
+
+### 2. Download the meteorological data. Use the `download_file` and `str_split_fixed` commands to download the data and save it in your data folder. You can use a for loop or a map function. 
+
+```{r}
+# Generate a function that downloads and names desired files
+
+dwnld_names <- function(links) {
+   splits <- str_split_fixed(links,'/',8)
+   dataset <- splits[,8] 
+   file_names <- paste0('data/',dataset)
+   for(i in 1:2){
+   download.file(links[i],destfile=file_names[i])
+   return (file_names)
+   }
+}
+
+dat_files <- dwnld_names(links)
+
+```
+
+
+### 3. Write a custom function to read in the data and append a site column to the data. 
+
+```{r}
+
+# this code grabs the variable names from the metadata pdf file
+
+headers <- pdf_text('https://snowstudies.org/wp-content/uploads/2022/02/Serially-Complete-Metadata-text08.pdf') %>%
+  readr::read_lines(.) %>%
+  trimws(.) %>%
+  str_split_fixed(.,'\\.',2) %>%
+  .[,2] %>%
+  .[1:20] %>%
+  trimws(.) %>%
+  str_replace_all(c(" "=".", "," = "", "\\[" = "" ,"\\]" = "",
+                    "-" = "")) %>% #added to replace spaces, brackets, hyphens, etc.
+  str_trim(side = "left")
+
+# Generate a function that opens desired files with a site column
+
+opn_concat <- function(dat_files) {
+   data <- lapply(dat_files, function(x) {
+     dat<- read_table(x,col_names=headers,skip=4)
+     dat$site <- unlist(strsplit(x, "_"))[2]
+      return(dat)
+   })
+   combined.data <- do.call(rbind, data) 
+   return(combined.data)
+}
+
+#snw_data <- opn_concat(dat_files)
+
+```
+
+### 4. Use the `map` function to read in both meteorological files. Display a summary of your tibble.
+```{r}
+# Generate a function that downloads and names desired files
+
+dwnld_names <- function(links) {
+   file_names <- paste0('data/',str_split_fixed(links,'/',8)[,8]) #this splits each link name into a list of items by '/' and selects the eight list item
+   map2(links, file_names, download.file) #iterates over each item in 'links', downloads and assigns 'file_names' to the file path
+   return (file_names)
+}
+
+dat_files <- dwnld_names(links)
+snw_data <- as.data.frame(opn_concat(dat_files)) 
+
+summary(snw_data)
+```
+
+### 5. Make a line plot of mean temp by year by site (using the `air temp [K]` variable). Is there anything suspicious in the plot? Adjust your filtering if needed.
+```{r}
+
+plot_data <- snw_data %>% 
+  select(c(site, year, air.temp.K)) %>%
+  filter(year >= 2004) %>% 
+  group_by(year, site) %>% 
+  summarize(meanvalue = mean(air.temp.K))
+
+x_axis_labels <- min(snw_data$year):max(snw_data$year)
+
+ggplot(plot_data, aes(year, meanvalue, color = site))+
+  geom_line() +
+  scale_x_continuous(labels = x_axis_labels, breaks = x_axis_labels)
+
+
+```
+<br/>
+**Response**<br/>
+**Data for each site starts at the end of the year (November) so means for that year are low and not representative of the annual mean. To resolve this, we can filter out all years < 2004.**
+
+### 6. Write a function that makes line plots of monthly average temperature at each site for a given year. Use a for loop to make these plots for 2005 to 2010. Are monthly average temperatures at the Senator Beck Study Plot ever warmer than the Snow Angel Study Plot?
+Hint: https://ggplot2.tidyverse.org/reference/print.ggplot.html
+```{r}
+#1. Write a function that makes line plots of monthly average temperature at each site for a given year
+
+mk_ln_plt <- function(df, yrval, x_axis_labels) {
+    df %>%
+    select(c(site, month, year, air.temp.K)) %>%
+    filter(year == yrval) %>% 
+    group_by(month, site) %>% 
+    summarize(meanvalue = mean(air.temp.K-273.15)) %>% # convert Kelvin to C
+    ggplot(aes(month, meanvalue, color=site)) +
+      geom_line() +
+      annotate(geom="text", x=11, y=280, label=yrval,
+              color="darkred") +
+    ylab('Mean monthly temperature (°C)') +
+    xlab('Month') +
+    ylim(-10,20) +
+    scale_color_manual(values=c("#999999", "#993300")) +
+    scale_x_continuous(labels = x_axis_labels, breaks = x_axis_labels) +
+    theme_bw() +
+  theme(axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank()) 
+}
+
+#2.Use a for loop to make these plots for 2005 to 2010.
+x_axis_labels <- min(snw_data$month):max(snw_data$month)
+
+
+for (i in 2005:2010){
+  p <-mk_ln_plt(snw_data,i, x_axis_labels)
+  print(p)
+}
+
+```
+<br/>
+**Response**<br/>
+**No, the monthly average temperatures at Senator Beck are always cooler than at Snow Angel.**
+
+### Bonus: Make a plot of average daily precipitation by day of year (averaged across all available years). Color each site. 
+
+**Downloaded precipitation values are intensity (kg/m2/s -> ~mm/second), so we can convert these to daily mean intensities finding the mean recorded value of each day, and multiplying that mean by 86400seconds/day to find daily accumulation in mm. Daily accumulation has been plotted below using average daily precip intensity** 
+```{r}
+# format dataframe including dates, column selection and aggregation
+plot_data <- snw_data %>% 
+  mutate(date = lubridate::ymd(paste0(year, month, day))) %>% #generate a 'date' column
+  mutate(doy = lubridate::yday(date)) %>% # make a doy column from date
+  select(c(site, year, doy, date, precip.kg.m2.s1)) %>% #select needed columns
+  group_by(year, date, doy, site) %>% # find precip accumulation for each day of each year
+  summarize(date.prec.accum = mean(precip.kg.m2.s1*86400)) %>% #daily accumulation in mm based on hourly mean intensity converted from kg/m2/s
+  arrange(site, date) %>% #now that we have a daily accum in mm, now we can find a mean for each day of the year using all years provided (2003-2011)
+  ungroup()%>%
+  group_by(doy, site) %>%
+  summarize(d.mean.prec.accum = mean(date.prec.accum))
+  
+ggplot(plot_data, aes(doy, d.mean.prec.accum, color = site))+
+  geom_line() +
+   ylab('Mean daily precipitation (mm)') +
+   xlab('Day of year (2003-2011)') +
+   ylim(0,55) +
+   scale_color_manual(values=c("#999999", "#025D6B")) +
+    theme(panel.background = element_blank(), 
+          axis.line = element_line(color = 'black'))
+
+```
+<br/>
+**Response** <br/>
+**As noted in class announcements, precip data is same for both, but code is written to show a average daily mean precipitation for each site if they differed**
+
+### Bonus #2: Use a function and for loop to create yearly plots of precipitation by day of year. Color each site. 
+ Bonus Question #2 would use a function and for loop to create unique plots of total precip by day for every year (or at least for 2005:2010 mirroring what we did for temp). Be sure to think very carefully about the units of precipitation and the time steps in the dataset if you tackle these questions.
+```{r}
+#1. Write a function to generate precip by day (total precip by day could be sum or each day as above, I am adding the cummulative sum so we can see total rainfall)
+
+prcp_sum_plt <- function(df, yrval) {
+    df %>%
+    mutate(date = lubridate::ymd(paste0(year, month, day))) %>% #convert 3 columns to date for transformation to doy
+    mutate(doy = lubridate::yday(date)) %>% #turn 'day' in date into a doy
+    filter(year == yrval) %>% 
+    select(c(site, year, doy, precip.kg.m2.s1)) %>%
+    group_by(year, doy, site) %>% 
+    summarize(sumprcp = sum(precip.kg.m2.s1)) %>%
+    ungroup() %>%
+    group_by(year, site) %>% 
+    mutate(sumvalue = cumsum(sumprcp)) %>% 
+    ggplot(aes(doy, sumvalue, color=site)) +
+      geom_line() +
+      annotate(geom="text", x=300, y=.3, label=yrval,
+              color="darkred") +
+      ylab('Accumulated precipitation (mm)') +
+      xlab('Month') +
+      ylim(0,0.5) +
+      xlim(150,365) +
+      scale_color_manual(values=c("#999999", "#993300")) +
+      #scale_x_continuous(labels = x_axis_labels, breaks = x_axis_labels) +
+      theme_bw() +
+      theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank()) 
+}
+
+#2.Use a for loop to make these plots for 2005 to 2010.
+#x_axis_labels <- min(snw_data$doy):max(snw_data$doy)
+
+
+for (i in 2005:2010){
+  p <- prcp_sum_plt(snw_data,i)
+  print(p)
+}
+
+```
+
+
+

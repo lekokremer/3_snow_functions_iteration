@@ -10,7 +10,7 @@ library(rvest)
 library(tidyverse)
 library(lubridate)
 library(readxl)
-
+library(pdftools)
 ```
 
 
@@ -140,21 +140,75 @@ ggplot(snow_yearly,aes(x=Year,y=mean_height,color=site)) +
 
 1. Extract the meteorological data URLs. Here we want you to use the `rvest` package to get the URLs for the `SASP forcing` and `SBSP_forcing` meteorological datasets.
 
+```{r}
+site_url <- 'https://snowstudies.org/archived-data/'
+
+#Read the web url
+webpage <- read_html(site_url)
+
+#Extract only weblinks and then the URLs!
+links <- webpage %>%
+  html_nodes('a') %>%
+  .[grepl('forcing',.)] %>%
+  html_attr('href')
+```
+
 2. Download the meteorological data. Use the `download_file` and `str_split_fixed` commands to download the data and save it in your data folder. You can use a for loop or a map function. 
+
+```{r}
+# Generate a function that downloads and names desired files
+
+dwnld_names <- function(links) {
+   splits <- str_split_fixed(links,'/',8)
+   dataset <- splits[,8] 
+   file_names <- paste0('data/',dataset)
+   for(i in 1:2){
+   download.file(links[i],destfile=file_names[i])
+   return (file_names)
+   }
+}
+
+dat_files <- dwnld_names(links)
+
+```
+
 
 3. Write a custom function to read in the data and append a site column to the data. 
 
 ```{r}
 
 # this code grabs the variable names from the metadata pdf file
-library(pdftools)
+
 headers <- pdf_text('https://snowstudies.org/wp-content/uploads/2022/02/Serially-Complete-Metadata-text08.pdf') %>%
   readr::read_lines(.) %>%
   trimws(.) %>%
   str_split_fixed(.,'\\.',2) %>%
   .[,2] %>%
-  .[1:26] %>%
+  .[1:20] %>%
   str_trim(side = "left")
+
+# Generate a function that opens desired files with a site column
+
+dat_tab <- function(data_files) {
+      dat <- read.table(data_files, skip = 0, header = TRUE, sep = ",", row.names = NULL, as.is = TRUE)
+      # for each item in path list, grab the cap_rod number
+      dat$site <- unlist(strsplit(x, "_"))[2]
+      return(dat)
+}    
+
+
+opn_concat <- function(dat_files) {
+   data <- lapply(dat_files, function(x) {
+      dat <- read_table(x,col_names=headers,skip=4)
+      #colnames(headers[1:18]) 
+      dat$site <- unlist(strsplit(x, "_"))[2]
+      return(dat)
+   })
+   combined.data <- do.call(rbind, data) 
+   return(combined.data)
+}
+
+snw_data <- opn_concat(dat_files)
 
 ```
 
